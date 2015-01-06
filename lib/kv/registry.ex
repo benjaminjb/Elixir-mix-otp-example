@@ -6,9 +6,9 @@ defmodule KV.Registry do
   @doc """
   Starts the registry.
   """
-  def start_link(event_manager, opts \\ []) do
-    # 1. start_link now expects the event manager as argument
-    GenServer.start_link(__MODULE__, event_manager, opts)
+  def start_link(event_manager, buckets, opts \\ []) do
+    # 1. Pass the buckets supervisor as argument
+    GenServer.start_link(__MODULE__, {event_manager, buckets}, opts)
   end
 
   @doc """
@@ -36,14 +36,11 @@ defmodule KV.Registry do
 
   ## Server Callbacks
 
-  def init(events) do
-    # 2. The init callback now receives the event manager.
-    #    We have also changed the manager state from a tuple
-    #    to a map, allowing us to add new fields in the future
-    #    without needing to rewrite all callbacks.
+  def init({events, buckets}) do
     names = HashDict.new
     refs  = HashDict.new
-    {:ok, %{names: names, refs: refs, events: events}}
+    # 2. Store the buckets supervisor in the state
+    {:ok, %{names: names, refs: refs, events: events, buckets: buckets}}
   end
 
   def handle_call(:stop, _from, state) do
@@ -58,11 +55,11 @@ defmodule KV.Registry do
     if HashDict.get(state.names, name) do
       {:noreply, state}
     else
-      {:ok, pid} = KV.Bucket.start_link()
+      # 3. Use the buckets supervisor instead of starting buckets directly
+      {:ok, pid} = KV.Bucket.Supervisor.start_bucket(state.buckets)
       ref = Process.monitor(pid)
       refs = HashDict.put(state.refs, ref, name)
       names = HashDict.put(state.names, name, pid)
-      # 3. Push a notification to the event manager on create
       GenEvent.sync_notify(state.events, {:create, name, pid})
       {:noreply, %{state | names: names, refs: refs}}
     end
